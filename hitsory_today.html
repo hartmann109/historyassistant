@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>中華民國史事查詢系統</title>
+    
+    <!-- 1. 載入 Tailwind CSS (樣式庫) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. 載入 Babel (讓瀏覽器看不懂的 JSX 程式碼可以執行) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- 3. 設定樣式微調 -->
+    <style>
+        body { font-family: "Noto Sans TC", sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+
+    <!-- 這是 React 應用程式掛載的進入點 -->
+    <div id="root"></div>
+
+    <!-- 4. 主要程式邏輯 (使用 type="text/babel" 並指定 module 以支援 import) -->
+    <script type="text/babel" data-type="module">
+        // 從 CDN 載入 React 和 Lucide 圖示庫
+        import React, { useState, useMemo, useEffect } from 'https://esm.sh/react@18.2.0';
+        import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
+        import { Calendar, Search, Filter, FileText, Upload, X, Clock, Tag, BookOpen, RefreshCw, AlertCircle, Globe, RotateCcw } from 'https://esm.sh/lucide-react@0.292.0';
+
+        // 資料來源 URL
+        const DATA_URL = "https://raw.githubusercontent.com/hartmann109/historyassistant/main/Taiwan_History_Final.csv";
+
+        const HistoryApp = () => {
+            // --- 資料狀態 ---
+            const [events, setEvents] = useState([]);
+            const [isDataLoaded, setIsDataLoaded] = useState(false);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+
+            // --- 搜尋模式狀態 ---
+            const [searchMode, setSearchMode] = useState('onThisDay'); 
+            
+            // --- 日期狀態 ---
+            const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
+            const [selectedDay, setSelectedDay] = useState(new Date().getDate());
+            const [selectedYear, setSelectedYear] = useState(1945);
+
+            // --- 過濾條件狀態 ---
+            const [inputCategory, setInputCategory] = useState('全部');
+            const [inputKeyword, setInputKeyword] = useState('');
+
+            // --- 實際套用的過濾條件 ---
+            const [appliedCategory, setAppliedCategory] = useState('全部');
+            const [appliedKeyword, setAppliedKeyword] = useState('');
+
+            // 初始化：自動從 URL 載入資料
+            useEffect(() => {
+                fetchData();
+            }, []);
+
+            const fetchData = async () => {
+                setLoading(true);
+                setError(null);
+                try {
+                const response = await fetch(DATA_URL);
+                if (!response.ok) {
+                    throw new Error(`無法連結資料庫 (HTTP ${response.status})`);
+                }
+                
+                // 使用 ArrayBuffer 與 TextDecoder 處理 Big5 編碼
+                const buffer = await response.arrayBuffer();
+                const decoder = new TextDecoder('big5');
+                const text = decoder.decode(buffer);
+                
+                const parsed = parseCSV(text);
+                processData(parsed);
+                setIsDataLoaded(true);
+                } catch (err) {
+                console.error("資料載入失敗:", err);
+                setError(err.message);
+                } finally {
+                setLoading(false);
+                }
+            };
+
+            const parseCSV = (text) => {
+                const lines = text.split(/\r\n|\n/);
+                const parsed = [];
+                for (let i = 1; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line) continue;
+                const firstComma = line.indexOf(',');
+                const secondComma = line.indexOf(',', firstComma + 1);
+                if (firstComma === -1 || secondComma === -1) continue;
+                const category = line.substring(0, firstComma).trim();
+                const rawDate = line.substring(firstComma + 1, secondComma).trim();
+                const summary = line.substring(secondComma + 1).trim();
+                parsed.push({ category, rawDate, summary });
+                }
+                return parsed;
+            };
+
+            const processData = (rawData) => {
+                const processed = rawData.map((item, index) => {
+                // 寬容的 Regex 解析日期: /(\d{4})\D+(\d{1,2})\D+(\d{1,2})/ 
+                const dateMatch = item.rawDate.match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})/);
+                let year = 0, month = 0, day = 0;
+                if (dateMatch) {
+                    year = parseInt(dateMatch[1]);
+                    month = parseInt(dateMatch[2]);
+                    day = parseInt(dateMatch[3]);
+                }
+                return {
+                    id: index,
+                    category: item.category,
+                    summary: item.summary,
+                    originalDate: item.rawDate,
+                    year,
+                    month,
+                    day
+                };
+                }).filter(item => item.year > 0);
+                setEvents(processed);
+            };
+
+            const handleApplyFilter = () => {
+                setAppliedCategory(inputCategory);
+                setAppliedKeyword(inputKeyword);
+            };
+
+            // 重設功能
+            const handleReset = () => {
+                setSearchMode('onThisDay');
+                const today = new Date();
+                setSelectedMonth(today.getMonth() + 1);
+                setSelectedDay(today.getDate());
+                setSelectedYear(1945);
+
+                setInputCategory('全部');
+                setInputKeyword('');
+
+                setAppliedCategory('全部');
+                setAppliedKeyword('');
+            };
+
+            const categories = useMemo(() => {
+                const cats = new Set(events.map(e => e.category).filter(Boolean));
+                return ['全部', ...Array.from(cats)];
+            }, [events]);
+
+            const filteredEvents = useMemo(() => {
+                return events.filter(event => {
+                // 1. 日期過濾
+                let dateMatch = true; 
+                
+                if (searchMode === 'onThisDay') {
+                    dateMatch = event.month === parseInt(selectedMonth) && event.day === parseInt(selectedDay);
+                } else if (searchMode === 'specificDate') {
+                    dateMatch = event.year === parseInt(selectedYear) && 
+                                event.month === parseInt(selectedMonth) && 
+                                event.day === parseInt(selectedDay);
+                }
+
+                if (!dateMatch) return false;
+
+                // 2. 類別過濾
+                if (appliedCategory !== '全部' && event.category !== appliedCategory) {
+                    return false;
+                }
+
+                // 3. 關鍵字過濾
+                if (appliedKeyword && !event.summary.includes(appliedKeyword)) {
+                    return false;
+                }
+
+                return true;
+                }).sort((a, b) => {
+                if (a.year !== b.year) return a.year - b.year;
+                if (a.month !== b.month) return a.month - b.month;
+                return a.day - b.day;
+                });
+            }, [events, searchMode, selectedMonth, selectedDay, selectedYear, appliedCategory, appliedKeyword]);
+
+            const years = Array.from({ length: 97 }, (_, i) => 1900 + i);
+            const months = Array.from({ length: 12 }, (_, i) => i + 1);
+            const days = Array.from({ length: 31 }, (_, i) => i + 1);
+
+            const getResultTitle = () => {
+                if (searchMode === 'keywordOnly') return '全庫搜尋結果';
+                if (searchMode === 'onThisDay') return `每年 ${selectedMonth}月${selectedDay}日`;
+                return `${selectedYear}年 ${selectedMonth}月${selectedDay}日`;
+            };
+
+            return (
+                <div className="min-h-screen bg-slate-50 text-slate-800 font-sans">
+                {/* 頂部標題區 */}
+                <header className="bg-blue-900 text-white p-6 shadow-md">
+                    <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
+                    <div>
+                        <h1 className="text-3xl font-bold flex items-center gap-2">
+                        <BookOpen className="w-8 h-8" />
+                        中華民國史事查詢系統
+                        </h1>
+                        <p className="text-blue-200 mt-2 text-sm leading-relaxed">
+                        查詢 1900 - 1996 年間的重要歷史事件紀錄，僅供檔案管理局同仁工作使用 By 黃宇暘。<br className="md:hidden" />
+                        資料來源：<a href="https://twstudy.iis.sinica.edu.tw/" target="_blank" rel="noreferrer" className="underline hover:text-white transition-colors">中研院臺灣研究網路化計畫</a>
+                        </p>
+                    </div>
+                    
+                    {/* 狀態顯示區 */}
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                        {loading ? (
+                        <div className="flex items-center gap-2 bg-blue-800 px-4 py-2 rounded-lg border border-blue-700">
+                            <div className="animate-spin w-4 h-4 border-2 border-blue-200 border-t-transparent rounded-full"></div>
+                            <span className="text-sm text-blue-100">正在下載資料庫...</span>
+                        </div>
+                        ) : error ? (
+                        <div className="flex items-center gap-3 bg-red-900/50 px-4 py-2 rounded-lg border border-red-700">
+                            <AlertCircle size={18} className="text-red-300" />
+                            <span className="text-sm text-red-200">讀取失敗: {error}</span>
+                            <button 
+                            onClick={fetchData}
+                            className="bg-red-800 hover:bg-red-700 text-xs px-2 py-1 rounded transition"
+                            >
+                            重試
+                            </button>
+                        </div>
+                        ) : (
+                        <div className="flex items-center gap-2 bg-green-900/30 px-4 py-2 rounded-lg border border-green-700/50">
+                            <div className="w-2 h-2 rounded-full bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.6)]"></div>
+                            <span className="text-sm text-green-100 font-medium">資料庫連線正常 ({events.length} 筆)</span>
+                        </div>
+                        )}
+                    </div>
+                    </div>
+                </header>
+
+                <main className="max-w-6xl mx-auto p-4 md:p-6">
+                    {/* 控制面板 */}
+                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-8">
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                        
+                        {/* 1. 模式選擇與日期設定 */}
+                        <div className="lg:col-span-5 space-y-4 border-b lg:border-b-0 lg:border-r border-slate-100 pb-6 lg:pb-0 lg:pr-8">
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">步驟 1: 選擇檢索模式</h3>
+                        
+                        {/* 模式按鈕群組 */}
+                        <div className="flex flex-col gap-2 mb-4">
+                            <div className="flex bg-slate-100 p-1 rounded-lg">
+                            <button
+                                onClick={() => setSearchMode('onThisDay')}
+                                className={`flex-1 py-2 px-2 rounded-md text-xs sm:text-sm font-medium transition-all ${
+                                searchMode === 'onThisDay' 
+                                    ? 'bg-white text-blue-700 shadow-sm' 
+                                    : 'text-slate-500 hover:text-slate-700'
+                                }`}
+                            >
+                                📅 歷史今天
+                            </button>
+                            <button
+                                onClick={() => setSearchMode('specificDate')}
+                                className={`flex-1 py-2 px-2 rounded-md text-xs sm:text-sm font-medium transition-all ${
+                                searchMode === 'specificDate' 
+                                    ? 'bg-white text-blue-700 shadow-sm' 
+                                    : 'text-slate-500 hover:text-slate-700'
+                                }`}
+                            >
+                                🎯 特定日期
+                            </button>
+                            <button
+                                onClick={() => setSearchMode('keywordOnly')}
+                                className={`flex-1 py-2 px-2 rounded-md text-xs sm:text-sm font-medium transition-all flex items-center justify-center gap-1 ${
+                                searchMode === 'keywordOnly' 
+                                    ? 'bg-white text-blue-700 shadow-sm' 
+                                    : 'text-slate-500 hover:text-slate-700'
+                                }`}
+                            >
+                                <Globe size={14} /> 全庫搜尋
+                            </button>
+                            </div>
+                        </div>
+
+                        {/* 日期選擇器 */}
+                        {searchMode !== 'keywordOnly' ? (
+                            <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                            <div className="flex flex-wrap gap-2 items-center">
+                                {searchMode === 'specificDate' && (
+                                <select 
+                                    value={selectedYear} 
+                                    onChange={(e) => setSelectedYear(e.target.value)}
+                                    className="bg-white border border-slate-300 rounded-md px-3 py-2 text-lg font-medium text-blue-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                                >
+                                    {years.map(y => <option key={y} value={y}>{y} 年</option>)}
+                                </select>
+                                )}
+                                
+                                <div className="flex items-center gap-2">
+                                <select 
+                                    value={selectedMonth} 
+                                    onChange={(e) => setSelectedMonth(e.target.value)}
+                                    className="bg-white border border-slate-300 rounded-md px-3 py-2 text-lg font-medium text-blue-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                                >
+                                    {months.map(m => <option key={m} value={m}>{m} 月</option>)}
+                                </select>
+                                <select 
+                                    value={selectedDay} 
+                                    onChange={(e) => setSelectedDay(e.target.value)}
+                                    className="bg-white border border-slate-300 rounded-md px-3 py-2 text-lg font-medium text-blue-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                                >
+                                    {days.map(d => <option key={d} value={d}>{d} 日</option>)}
+                                </select>
+                                </div>
+                            </div>
+                            <div className="text-sm text-slate-500 mt-2 flex items-center gap-1">
+                                <Clock size={14} />
+                                變更日期會立即更新下方列表
+                            </div>
+                            </div>
+                        ) : (
+                            <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm text-blue-800 flex items-start gap-2 animate-in fade-in slide-in-from-top-2 duration-300">
+                            <Search size={18} className="mt-0.5 flex-shrink-0" />
+                            <div>
+                                <p className="font-bold mb-1">全庫搜尋模式</p>
+                                <p>此模式不限日期，將搜尋資料庫中的所有事件。</p>
+                                <p className="mt-2 text-blue-600">請在右側輸入關鍵字並按下「執行篩選」。</p>
+                            </div>
+                            </div>
+                        )}
+                        </div>
+
+                        {/* 2. 過濾與搜尋 */}
+                        <div className="lg:col-span-7 space-y-4">
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-3">步驟 2: 條件篩選 (需按按鈕)</h3>
+                        
+                        <div className={`bg-slate-50 p-4 rounded-lg border ${searchMode === 'keywordOnly' ? 'border-blue-300 ring-2 ring-blue-100' : 'border-slate-200'} transition-all`}>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 mb-1">類別</label>
+                                <div className="relative">
+                                <Filter className="absolute left-3 top-2.5 text-slate-400 w-4 h-4" />
+                                <select
+                                    value={inputCategory}
+                                    onChange={(e) => setInputCategory(e.target.value)}
+                                    className="w-full pl-9 pr-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:outline-none appearance-none bg-white"
+                                    disabled={!isDataLoaded}
+                                >
+                                    {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 mb-1">關鍵字</label>
+                                <div className="relative">
+                                <Search className="absolute left-3 top-2.5 text-slate-400 w-4 h-4" />
+                                <input
+                                    type="text"
+                                    placeholder={searchMode === 'keywordOnly' ? "請輸入搜尋內容..." : "輸入關鍵字..."}
+                                    value={inputKeyword}
+                                    onChange={(e) => setInputKeyword(e.target.value)}
+                                    onKeyDown={(e) => e.key === 'Enter' && handleApplyFilter()}
+                                    className="w-full pl-9 pr-4 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                                    disabled={!isDataLoaded}
+                                    autoFocus={searchMode === 'keywordOnly'}
+                                />
+                                {inputKeyword && (
+                                    <button 
+                                    onClick={() => setInputKeyword('')}
+                                    className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600"
+                                    >
+                                    <X className="w-4 h-4" />
+                                    </button>
+                                )}
+                                </div>
+                            </div>
+                            </div>
+
+                            <div className="flex justify-between items-center">
+                            <div className="text-sm text-slate-600 hidden sm:block">
+                                當前篩選：
+                                <span className="font-medium bg-white px-2 py-0.5 rounded border border-slate-200 mx-1">
+                                {appliedCategory}
+                                </span>
+                                {appliedKeyword && (
+                                <span className="font-medium bg-white px-2 py-0.5 rounded border border-slate-200 mx-1">
+                                    "{appliedKeyword}"
+                                </span>
+                                )}
+                            </div>
+                            <div className="flex gap-2 ml-auto sm:ml-0">
+                                <button 
+                                onClick={handleReset}
+                                className="px-4 py-2 bg-white border border-slate-300 rounded-md hover:bg-slate-100 text-slate-600 transition-all shadow-sm font-medium flex items-center gap-2"
+                                title="重設所有篩選條件與日期"
+                                >
+                                <RotateCcw size={16} />
+                                重設
+                                </button>
+                                <button 
+                                onClick={handleApplyFilter}
+                                disabled={!isDataLoaded}
+                                className={`
+                                    px-6 py-2 rounded-md hover:bg-blue-700 active:scale-95 transition-all shadow-sm font-medium flex items-center gap-2 disabled:bg-slate-300 disabled:cursor-not-allowed
+                                    ${searchMode === 'keywordOnly' ? 'bg-blue-700 text-white ring-2 ring-offset-2 ring-blue-500' : 'bg-blue-600 text-white'}
+                                `}
+                                >
+                                <Search size={16} />
+                                執行篩選
+                                </button>
+                            </div>
+                            </div>
+                        </div>
+                        </div>
+
+                    </div>
+                    </div>
+
+                    {/* 結果列表 */}
+                    {loading ? (
+                    <div className="text-center py-20 text-slate-500">
+                        <div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full mx-auto mb-4"></div>
+                        正在同步歷史資料庫...
+                    </div>
+                    ) : error ? (
+                    <div className="text-center py-20 bg-white rounded-xl border border-red-200 border-dashed">
+                        <AlertCircle size={48} className="text-red-300 mx-auto mb-4" />
+                        <h3 className="text-lg font-medium text-red-800">資料載入發生錯誤</h3>
+                        <p className="text-red-600 mt-2 mb-4">{error}</p>
+                        <button 
+                        onClick={fetchData}
+                        className="px-4 py-2 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition shadow-sm text-slate-700 flex items-center gap-2 mx-auto"
+                        >
+                        <RefreshCw size={16} /> 重試連線
+                        </button>
+                    </div>
+                    ) : (
+                    <div className="space-y-4">
+                        <h2 className="text-xl font-bold text-slate-700 mb-4 flex items-center justify-between">
+                        <span className="flex items-center gap-2">
+                            查詢結果 
+                            <span className="text-base font-normal text-slate-500">
+                            ({getResultTitle()})
+                            </span>
+                        </span>
+                        <span className="text-sm font-normal bg-slate-200 text-slate-600 px-3 py-1 rounded-full">
+                            共找到 {filteredEvents.length} 筆資料
+                        </span>
+                        </h2>
+
+                        {filteredEvents.length === 0 ? (
+                        <div className="text-center py-20 bg-white rounded-xl border border-slate-200 border-dashed">
+                            <div className="text-slate-300 mb-4 mx-auto w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center">
+                            <FileText size={32} />
+                            </div>
+                            <h3 className="text-lg font-medium text-slate-600">沒有找到符合的事件</h3>
+                            <p className="text-slate-400 mt-2">
+                            {appliedCategory !== '全部' || appliedKeyword 
+                                ? "請嘗試放寬篩選條件或清除關鍵字" 
+                                : "目前條件下沒有符合的資料"}
+                            </p>
+                        </div>
+                        ) : (
+                        <div className="grid gap-4">
+                            {filteredEvents.map((event) => (
+                            <div 
+                                key={event.id} 
+                                className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm hover:shadow-md transition-shadow flex flex-col md:flex-row gap-4 md:items-start group"
+                            >
+                                <div className="md:w-32 flex-shrink-0">
+                                <div className="text-2xl font-bold text-blue-900 font-mono">
+                                    {event.year}
+                                </div>
+                                <div className="text-sm text-slate-500 font-medium">
+                                    {event.month}月 {event.day}日
+                                </div>
+                                <div className={`mt-2 inline-block px-2 py-1 rounded text-xs font-semibold ${
+                                    event.category.includes('政治') ? 'bg-red-100 text-red-700' :
+                                    event.category.includes('社會') ? 'bg-green-100 text-green-700' :
+                                    event.category.includes('國際') ? 'bg-indigo-100 text-indigo-700' :
+                                    'bg-slate-100 text-slate-700'
+                                }`}>
+                                    {event.category}
+                                </div>
+                                </div>
+                                
+                                <div className="flex-1 pt-1">
+                                <p className="text-slate-800 leading-relaxed text-lg group-hover:text-blue-900 transition-colors">
+                                    {/* 關鍵字高亮顯示 */}
+                                    {appliedKeyword ? (
+                                    event.summary.split(appliedKeyword).map((part, i, arr) => (
+                                        <React.Fragment key={i}>
+                                        {part}
+                                        {i < arr.length - 1 && <span className="bg-yellow-200 font-bold">{appliedKeyword}</span>}
+                                        </React.Fragment>
+                                    ))
+                                    ) : (
+                                    event.summary
+                                    )}
+                                </p>
+                                </div>
+                            </div>
+                            ))}
+                        </div>
+                        )}
+                    </div>
+                    )}
+                </main>
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<HistoryApp />);
+    </script>
+</body>
+</html>
